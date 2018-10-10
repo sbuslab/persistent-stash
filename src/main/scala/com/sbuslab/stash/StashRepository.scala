@@ -120,11 +120,10 @@ class StashRepository(
           .addValue("messageId", messageId)
       )
 
-      if (deleted > 0) {
-        dequeueFromStash(correlationId, null)
-      } else {
+      if (deleted == 0) {
         log.warn("Operation with correlation = {} and messageId = {} already completed or non exist! Skip...", correlationId, messageId)
-        None
       }
+
+      dequeueFromStash(correlationId, null)
     }
 }
