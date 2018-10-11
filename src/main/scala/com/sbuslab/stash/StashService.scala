@@ -39,7 +39,10 @@ class StashService(
   }
 
   def stash(correlationId: String, command: AnyRef, context: Context)(f: ⇒ Future[_]): Future[_] =
-    newOperation(correlationId, command, context) match {
+    stash(correlationId, context.messageId, command, context)(f)
+
+  def stash(correlationId: String, messageId: String, command: AnyRef, context: Context)(f: ⇒ Future[_]): Future[_] =
+    newOperation(correlationId, messageId, command, context) match {
       case Some(accepted) ⇒
         log.debug("Accept and run new operation: {} with {} and {} with context {}", accepted.getRoutingKey, accepted.getCorrelationId, accepted.getMessageId, context)
 
@@ -52,16 +55,16 @@ class StashService(
         }
 
       case _ ⇒
-        Future.successful(null); // operation stashed
+        Future.successful(null); // operation stashed, skip...
     }
 
   def complete(correlationId: String, messageId: String): Unit =
     stashRepo.completeAndCheckNext(correlationId, messageId) foreach sendCommand
 
-  private def newOperation(correlationId: String, command: AnyRef, context: Context): Option[Operation] = {
+  private def newOperation(correlationId: String, messageId: String, command: AnyRef, context: Context): Option[Operation] = {
     val op = Operation.builder()
       .correlationId(correlationId)
-      .messageId(context.messageId)
+      .messageId(messageId)
       .routingKey(context.routingKey)
       .body(mapper.writeValueAsString(command))
       .transportCorrelationId(context.correlationId)
