@@ -30,7 +30,9 @@ class StashService(
   actorSystem.scheduler.schedule(ExpirationTimeout, ExpirationTimeout) {
     val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
 
-    log.debug("Found {} expired operations, retry...", expired.size())
+    if (!expired.isEmpty) {
+      log.debug("Found {} expired operations, retry...", expired.size())
+    }
 
     expired forEach { op ⇒
       log.debug("Retry expired operation: " + op)
