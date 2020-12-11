@@ -46,13 +46,13 @@ class StashService(
   def stash(correlationId: String, messageId: String, command: AnyRef, context: Context)(f: ⇒ Future[_]): Future[_] =
     newOperation(correlationId, messageId, command, context) match {
       case Some(accepted) ⇒
-        log.debug("Accept and run new operation: {} with {} and {} with context {}", accepted.getRoutingKey, accepted.getCorrelationId, accepted.getMessageId, context)
+        slog.debug("Accept and run new operation: {} with {} and {} with context {}", accepted.getRoutingKey, accepted.getCorrelationId, accepted.getMessageId, context)(context)
 
         (try f catch {
           case NonFatal(e) ⇒ Future.failed(e)
         }) andThen {
           case Failure(e) if UnrecoverableFailures.contains(e) ⇒
-            log.warn("Unrecoverable failure on Stash: {}, complete and check next for {}, messageId = {}", e, accepted.getCorrelationId, accepted.getMessageId)
+            slog.warn("Unrecoverable failure on Stash: {}, complete and check next for {}, messageId = {}", e, accepted.getCorrelationId, accepted.getMessageId)(context)
             stashRepo.completeAndCheckNext(accepted.getCorrelationId, accepted.getMessageId) foreach sendCommand
         }
 
@@ -76,7 +76,7 @@ class StashService(
     if (stashRepo.saveNewOperation(op)) {
       Some(op)
     } else {
-      log.debug("Save operation {} with corrId = {} to stash", op.getRoutingKey, op.getCorrelationId)
+      slog.debug("Save operation {} with corrId = {} to stash", op.getRoutingKey, op.getCorrelationId)(context)
       stashRepo.saveToStash(op)
       None
     }
