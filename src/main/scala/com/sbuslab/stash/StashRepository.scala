@@ -112,6 +112,14 @@ class StashRepository(
       rowMapper
     )
 
+  def removeExpiredOperations(expiredTimeoutMillis: Long): Int =
+    jdbcTemplate.update("""
+      DELETE FROM stash_operations
+      WHERE created_at < :expiredAt
+      """,
+      new MapSqlParameterSource("expiredAt", System.currentTimeMillis() - expiredTimeoutMillis)
+    )
+
   def completeAndCheckNext(correlationId: String, messageId: String): Option[Operation] =
     transactionTemplate execute { _ ⇒
       val deleted = jdbcTemplate.update(

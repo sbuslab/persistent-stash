@@ -8,6 +8,7 @@ import scala.util.control.NonFatal
 
 import akka.actor.ActorSystem
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.typesafe.config.Config
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 
@@ -22,21 +23,31 @@ class StashService(
   sbus: Sbus,
   stashRepo: StashRepository,
   mapper: ObjectMapper,
-  actorSystem: ActorSystem
+  actorSystem: ActorSystem,
+  config: Config
 )(implicit ec: ExecutionContext) extends Logging {
 
   private val ExpirationTimeout = 2.minutes
+  private val RetryFailedOperation = config.getBoolean("sbuslab.stash.retry-failed-operation")
 
   actorSystem.scheduler.schedule(ExpirationTimeout, ExpirationTimeout) {
-    val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
+    if (RetryFailedOperation) {
+      val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
 
-    if (!expired.isEmpty) {
-      log.debug("Found {} expired operations, retry...", expired.size())
-    }
+      if (!expired.isEmpty) {
+        log.debug("Found {} expired operations, retry...", expired.size())
+      }
 
-    expired forEach { op ⇒
-      log.debug("Retry expired operation: " + op)
-      sendCommand(op)
+      expired forEach { op ⇒
+        log.debug("Retry expired operation: " + op)
+        sendCommand(op)
+      }
+    } else {
+      val removed = stashRepo.removeExpiredOperations(ExpirationTimeout.toMillis)
+
+      if (removed > 0) {
+        log.debug(s"Removed $removed expired operations")
+      }
     }
   }
 
@@ -46,18 +57,22 @@ class StashService(
   def stash(correlationId: String, messageId: String, command: AnyRef, context: Context)(f: ⇒ Future[_]): Future[_] =
     newOperation(correlationId, messageId, command, context) match {
       case Some(accepted) ⇒
-        slog.debug("Accept and run new operation: {} with {} and {} with context {}", accepted.getRoutingKey, accepted.getCorrelationId, accepted.getMessageId, context)(context)
+        slog.debug(s"Accept and run new operation: ${accepted.getRoutingKey} with ${accepted.getCorrelationId} and ${accepted.getMessageId}")(context)
 
         (try f catch {
           case NonFatal(e) ⇒ Future.failed(e)
         }) andThen {
-          case Failure(e) if UnrecoverableFailures.contains(e) ⇒
-            slog.warn("Unrecoverable failure on Stash: {}, complete and check next for {}, messageId = {}", e, accepted.getCorrelationId, accepted.getMessageId)(context)
-            stashRepo.completeAndCheckNext(accepted.getCorrelationId, accepted.getMessageId) foreach sendCommand
+          case Failure(e) ⇒
+            if (!RetryFailedOperation || UnrecoverableFailures.contains(e)) {
+              slog.warn(s"Unrecoverable failure on Stash: $e, complete and check next for ${accepted.getCorrelationId}, messageId = ${accepted.getMessageId}", e)(context)
+              stashRepo.completeAndCheckNext(accepted.getCorrelationId, accepted.getMessageId) foreach sendCommand
+            } else {
+              slog.debug(s"Failed stash operation: ${e.getMessage}, keep and retry after delay...", e)(context)
+            }
         }
 
       case _ ⇒
-        Future.successful(null); // operation stashed, skip...
+        Future.successful(null) // operation stashed, skip...
     }
 
   def complete(correlationId: String, messageId: String): Unit =
@@ -72,7 +87,7 @@ class StashService(
       .transportCorrelationId(context.correlationId)
       .build()
 
-    // if no message inserted then save this operation to stash (active operation already exists for this currelationId)
+    // if no message inserted then save this operation to stash (active operation already exists for this correlationId)
     if (stashRepo.saveNewOperation(op)) {
       Some(op)
     } else {
@@ -86,6 +101,7 @@ class StashService(
     try {
       sbus.command(next.getRoutingKey, mapper.readTree(next.getBody))(
         Context.empty
+          .withRetries(0)
           .withTimeout(ExpirationTimeout.toMillis)
           .withValue(Headers.ClientMessageId, next.getMessageId)
           .withCorrelationId(next.getTransportCorrelationId)
