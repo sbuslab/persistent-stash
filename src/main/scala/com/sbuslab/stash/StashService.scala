@@ -50,6 +50,12 @@ class StashService(
           log.debug(s"Removed $removed expired operations")
         }
       }
+
+      // dequeue from stash queue expired operations
+      stashRepo.dequeueFromStash(createdBefore = System.currentTimeMillis() - ExpirationTimeout.toMillis * 2) foreach { op ⇒
+        log.debug("Retry expired operation from stash queue: " + op)
+        sendCommand(op)
+      }
     } catch {
       case e: Throwable ⇒
         log.error(s"Error on proceed expired stash operations: ${e.getMessage}, skip...", e)

@@ -52,13 +52,15 @@ class StashRepository(
         .addValue("transportCorrelationId", op.getTransportCorrelationId)
     )
 
-  def dequeueFromStash(correlationId: String, replaceMessageId: String): Option[Operation] =
+  def dequeueFromStash(correlationId: String = null, replaceMessageId: String = null, createdBefore: Long = 0): Option[Operation] =
     transactionTemplate execute { _ ⇒
       val ops = jdbcTemplate.query(s"""
           INSERT INTO stash_operations AS o (correlation_id, message_id, routing_key, body, transport_correlation_id, created_at)
             (SELECT correlation_id, message_id, routing_key, body, transport_correlation_id, :now AS created_at
               FROM stash_operations_queue s
-              WHERE correlation_id = :correlationId
+              WHERE
+                ${if (correlationId != null) "correlation_id = :correlationId" else ""}
+                ${if (createdBefore != 0) "created_at < :createdBefore" else ""}
               ORDER BY created_at ASC LIMIT 1)
           ON CONFLICT (correlation_id) DO
           ${if (replaceMessageId != null) {
@@ -77,6 +79,7 @@ class StashRepository(
           """,
         new MapSqlParameterSource("correlationId", correlationId)
           .addValue("messageId", replaceMessageId)
+          .addValue("createdBefore", createdBefore)
           .addValue("now", System.currentTimeMillis()),
         rowMapper
       )
@@ -132,6 +135,6 @@ class StashRepository(
         log.warn("Operation with correlation = {} and messageId = {} already completed or non exist! Skip...", correlationId, messageId)
       }
 
-      dequeueFromStash(correlationId, null)
+      dequeueFromStash(correlationId)
     }
 }
