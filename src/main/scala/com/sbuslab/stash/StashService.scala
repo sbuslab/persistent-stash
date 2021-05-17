@@ -31,23 +31,28 @@ class StashService(
   private val RetryFailedOperation = config.getBoolean("sbuslab.stash.retry-failed-operation")
 
   actorSystem.scheduler.schedule(ExpirationTimeout, ExpirationTimeout) {
-    if (RetryFailedOperation) {
-      val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
+    try {
+      if (RetryFailedOperation) {
+        val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
 
-      if (!expired.isEmpty) {
-        log.debug("Found {} expired operations, retry...", expired.size())
-      }
+        if (!expired.isEmpty) {
+          log.debug("Found {} expired operations, retry...", expired.size())
+        }
 
-      expired forEach { op ⇒
-        log.debug("Retry expired operation: " + op)
-        sendCommand(op)
-      }
-    } else {
-      val removed = stashRepo.removeExpiredOperations(ExpirationTimeout.toMillis)
+        expired forEach { op ⇒
+          log.debug("Retry expired operation: " + op)
+          sendCommand(op)
+        }
+      } else {
+        val removed = stashRepo.removeExpiredOperations(ExpirationTimeout.toMillis)
 
-      if (removed > 0) {
-        log.debug(s"Removed $removed expired operations")
+        if (removed > 0) {
+          log.debug(s"Removed $removed expired operations")
+        }
       }
+    } catch {
+      case e: Throwable ⇒
+        log.error(s"Error on proceed expired stash operations: ${e.getMessage}, skip...", e)
     }
   }
 
