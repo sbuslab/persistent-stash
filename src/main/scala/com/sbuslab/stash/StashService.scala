@@ -10,6 +10,7 @@ import akka.actor.ActorSystem
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.typesafe.config.Config
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.context.annotation.Lazy
 import org.springframework.stereotype.Component
 
 import com.sbuslab.model.{InternalServerError, UnrecoverableFailures}
@@ -17,6 +18,7 @@ import com.sbuslab.sbus._
 import com.sbuslab.utils.Logging
 
 
+@Lazy
 @Autowired
 @Component
 class StashService(
