@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.typesafe.config.Config
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Lazy
+import org.springframework.context.event.{ContextRefreshedEvent, EventListener}
 import org.springframework.stereotype.Component
 
 import com.sbuslab.model.{InternalServerError, UnrecoverableFailures}
@@ -29,67 +30,79 @@ class StashService(
   config: Config
 )(implicit ec: ExecutionContext) extends Logging {
 
-  private val ExpirationTimeout = 2.minutes
+  private val Enabled              = config.getBoolean("sbuslab.stash.enabled")
+  private val ExpirationTimeout    = config.getDuration("sbuslab.stash.expiration-timeout").toMillis.millis
   private val RetryFailedOperation = config.getBoolean("sbuslab.stash.retry-failed-operation")
 
-  actorSystem.scheduler.schedule(ExpirationTimeout, ExpirationTimeout) {
-    try {
-      if (RetryFailedOperation) {
-        val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
 
-        if (!expired.isEmpty) {
-          log.debug("Found {} expired operations, retry...", expired.size())
-        }
+  @EventListener(Array(classOf[ContextRefreshedEvent]))
+  def init(): Unit =
+    if (Enabled) {
+      actorSystem.scheduler.schedule(ExpirationTimeout, ExpirationTimeout) {
+        try {
+          if (RetryFailedOperation) {
+            val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)
 
-        expired forEach { op ⇒
-          log.debug("Retry expired operation: " + op)
-          sendCommand(op)
-        }
-      } else {
-        val removed = stashRepo.removeExpiredOperations(ExpirationTimeout.toMillis)
+            if (!expired.isEmpty) {
+              log.debug("Found {} expired operations, retry...", expired.size())
+            }
 
-        if (removed > 0) {
-          log.debug(s"Removed $removed expired operations")
+            expired forEach { op ⇒
+              log.debug("Retry expired operation: " + op)
+              sendCommand(op)
+            }
+          } else {
+            val removed = stashRepo.removeExpiredOperations(ExpirationTimeout.toMillis)
+
+            if (removed > 0) {
+              log.debug(s"Removed $removed expired operations")
+            }
+          }
+
+          // dequeue from stash queue expired operations
+          stashRepo.dequeueFromStash(createdBefore = System.currentTimeMillis() - ExpirationTimeout.toMillis * 2) foreach { op ⇒
+            log.debug("Retry expired operation from stash queue: " + op)
+            sendCommand(op)
+          }
+        } catch {
+          case e: Throwable ⇒
+            log.error(s"Error on proceed expired stash operations: ${e.getMessage}, skip...", e)
         }
       }
-
-      // dequeue from stash queue expired operations
-      stashRepo.dequeueFromStash(createdBefore = System.currentTimeMillis() - ExpirationTimeout.toMillis * 2) foreach { op ⇒
-        log.debug("Retry expired operation from stash queue: " + op)
-        sendCommand(op)
-      }
-    } catch {
-      case e: Throwable ⇒
-        log.error(s"Error on proceed expired stash operations: ${e.getMessage}, skip...", e)
     }
-  }
 
   def stash(correlationId: String, command: AnyRef, context: Context)(f: ⇒ Future[_]): Future[_] =
     stash(correlationId, context.messageId, command, context)(f)
 
   def stash(correlationId: String, messageId: String, command: AnyRef, context: Context)(f: ⇒ Future[_]): Future[_] =
-    newOperation(correlationId, messageId, command, context) match {
-      case Some(accepted) ⇒
-        slog.debug(s"Accept and run new operation: ${accepted.getRoutingKey} with ${accepted.getCorrelationId} and ${accepted.getMessageId}")(context)
+    if (Enabled) {
+      newOperation(correlationId, messageId, command, context) match {
+        case Some(accepted) ⇒
+          slog.debug(s"Accept and run new operation: ${accepted.getRoutingKey} with ${accepted.getCorrelationId} and ${accepted.getMessageId}")(context)
 
-        (try f catch {
-          case NonFatal(e) ⇒ Future.failed(e)
-        }) andThen {
-          case Failure(e) ⇒
-            if (!RetryFailedOperation || UnrecoverableFailures.contains(e)) {
-              slog.warn(s"Unrecoverable failure on Stash: $e, complete and check next for ${accepted.getCorrelationId}, messageId = ${accepted.getMessageId}", e)(context)
-              stashRepo.completeAndCheckNext(accepted.getCorrelationId, accepted.getMessageId) foreach sendCommand
-            } else {
-              slog.debug(s"Failed stash operation: ${e.getMessage}, keep and retry after delay...", e)(context)
-            }
-        }
+          (try f catch {
+            case NonFatal(e) ⇒ Future.failed(e)
+          }) andThen {
+            case Failure(e) ⇒
+              if (!RetryFailedOperation || UnrecoverableFailures.contains(e)) {
+                slog.warn(s"Unrecoverable failure on Stash: $e, complete and check next for ${accepted.getCorrelationId}, messageId = ${accepted.getMessageId}", e)(context)
+                stashRepo.completeAndCheckNext(accepted.getCorrelationId, accepted.getMessageId) foreach sendCommand
+              } else {
+                slog.debug(s"Failed stash operation: ${e.getMessage}, keep and retry after delay...", e)(context)
+              }
+          }
 
-      case _ ⇒
-        Future.successful(null) // operation stashed, skip...
+        case _ ⇒
+          Future.successful(null) // operation stashed, skip...
+      }
+    } else {
+      f
     }
 
   def complete(correlationId: String, messageId: String): Unit =
-    stashRepo.completeAndCheckNext(correlationId, messageId) foreach sendCommand
+    if (Enabled) {
+      stashRepo.completeAndCheckNext(correlationId, messageId) foreach sendCommand
+    }
 
   private def newOperation(correlationId: String, messageId: String, command: AnyRef, context: Context): Option[Operation] = {
     val op = Operation.builder()
