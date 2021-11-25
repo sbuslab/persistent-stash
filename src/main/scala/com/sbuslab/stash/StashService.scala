@@ -38,7 +38,7 @@ class StashService(
   @EventListener(Array(classOf[ContextRefreshedEvent]))
   def init(): Unit =
     if (Enabled) {
-      actorSystem.scheduler.schedule(ExpirationTimeout, ExpirationTimeout) {
+      actorSystem.scheduler.scheduleAtFixedRate(ExpirationTimeout, ExpirationTimeout) { () ⇒
         try {
           if (RetryFailedOperation) {
             val expired = stashRepo.proceedExpiredOperations(ExpirationTimeout.toMillis)

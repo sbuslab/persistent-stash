@@ -63,5 +63,5 @@ modifyPom {
 
 dependencies {
     compile 'com.sbuslab:utils:[1.3.0,1.4.0)'
-    annotationProcessor 'org.projectlombok:lombok:1.18.10'
+    annotationProcessor 'org.projectlombok:lombok:1.18.22'
 }
