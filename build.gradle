@@ -8,22 +8,22 @@ buildscript {
 
 plugins {
     id 'io.codearte.nexus-staging' version '0.30.0' apply false
-    id "com.bmuschko.nexus" version "2.3.1"
+    id "maven-publish"
 }
 
 apply plugin: 'scala'
+apply plugin: 'java-library'
 
 group 'com.sbuslab'
 
 repositories {
     maven { url 'https://oss.sonatype.org/content/repositories/public' }
     mavenCentral()
-    jcenter()
 }
 
 if (this.parent == null) {
     apply plugin: 'io.codearte.nexus-staging'
-    apply plugin: 'com.bmuschko.nexus'
+    apply plugin: 'maven-publish'
 
     nexusStaging {
         packageGroup = 'com.sbuslab'
@@ -33,35 +33,65 @@ if (this.parent == null) {
     }
 }
 
-modifyPom {
-    project {
-        name 'persistent-stash'
-        description 'Persistent stash service'
-        url 'https://github.com/sbuslab/persistent-stash'
-        inceptionYear '2018'
-        scm {
-            url 'https://github.com/sbuslab/persistent-stash'
-            connection 'scm:https://github.com/sbuslab/persistent-stash.git'
-            developerConnection 'scm:git://github.com/sbuslab/persistent-stash.git'
-        }
-        licenses {
-            license {
-                name 'The Apache Software License, Version 2.0'
-                url 'http://www.apache.org/licenses/LICENSE-2.0.txt'
-                distribution 'repo'
+publishing {
+        publications {
+        mavenJava(MavenPublication) {
+            artifactId = 'persistent-stash'
+            from components.java
+            versionMapping {
+                usage('java-api') {
+                    fromResolutionOf('runtimeClasspath')
+                }
+                usage('java-runtime') {
+                    fromResolutionResult()
+                }
+            }
+            pom {
+                name = 'persistent-stash'
+                description = 'Persistent stash service'
+                url = 'https://github.com/sbuslab/persistent-stash'
+                inceptionYear = '2018'
+
+                licenses {
+                    license {
+                        name = 'The Apache Software License, Version 2.0'
+                        url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                        distribution = 'repo'
+                    }
+                }
+
+                developers {
+                    developer {
+                        id = 'kulikovd'
+                        name = 'Dmitry Kulikov'
+                        email = 'kulikov.dm@gmail.com'
+                    }
+                }
+
+                scm {
+                    url = 'https://github.com/sbuslab/persistent-stash'
+                    connection = 'scm:https://github.com/sbuslab/persistent-stash.git'
+                    developerConnection = 'scm:git@github.com:sbuslab/persistent-stash.git'
+                }
             }
         }
-        developers {
-            developer {
-                id 'kulikovd'
-                name 'Dmitry Kulikov'
-                email 'kulikov.dm@gmail.com'
+    }
+    repositories {
+        maven {
+            def releasesRepoUrl = "https://oss.sonatype.org/service/local/staging/deploy/maven2"
+            def snapshotsRepoUrl = "https://oss.sonatype.org/content/repositories/snapshots"
+            url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+
+            credentials {
+                username = project.findProperty('nexusUsername') ?: ''
+                password = project.findProperty('nexusPassword') ?: ''
             }
         }
     }
 }
 
 dependencies {
-    compile 'com.sbuslab:utils:[1.3.0,1.4.0)'
     annotationProcessor 'org.projectlombok:lombok:1.18.22'
+
+    api 'com.sbuslab:utils:[1.3.0,1.4.0)'
 }
